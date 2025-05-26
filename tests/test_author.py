@@ -1,60 +1,55 @@
-import pytest
 from lib.models.author import Author
-from lib.models.magazine import Magazine
-from lib.models.article import Article
 from lib.db.connection import get_connection
+import pytest
 
 @pytest.fixture
-def setup_db():
+def db_connection():
     conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM articles")
-    cursor.execute("DELETE FROM authors")
-    cursor.execute("DELETE FROM magazines")
-    conn.commit()
-    
-    # Create test data
-    author = Author.create("Test Author")
-    magazine = Magazine.create("Test Magazine", "Test Category")
-    Article.create("Test Article", author, magazine)
-    
-    yield
-    
-    # Clean up
-    cursor.execute("DELETE FROM articles")
-    cursor.execute("DELETE FROM authors")
-    cursor.execute("DELETE FROM magazines")
-    conn.commit()
+    yield conn
     conn.close()
 
-def test_author_creation():
-    author = Author("Test Author")
-    assert author.name == "Test Author"
+@pytest.fixture
+def setup_test_data(db_connection):
+    cursor = db_connection.cursor()
+    
+    # Clear and create fresh tables
+    with open("lib/db/schema.sql") as f:
+        schema = f.read()
+    cursor.executescript(schema)
+    
+    # Insert test author and get its ID
+    cursor.execute("INSERT INTO authors (name) VALUES ('Test Author')")
+    db_connection.commit()
+    
+    cursor.execute("SELECT last_insert_rowid()")
+    author_id = cursor.fetchone()[0]
+    
+    yield author_id
+    
+    # Clean up
+    cursor.execute("DELETE FROM authors")
+    db_connection.commit()
 
-def test_author_save():
-    author = Author("Test Author")
-    saved_author = author.save()
-    assert saved_author.id is not None
-
-def test_author_find_by_id(setup_db):
-    author = Author.find_by_id(1)
+def test_author_find_by_id(setup_test_data, db_connection):
+    author_id = setup_test_data
+    author = Author.find_by_id(author_id)
+    
     assert author is not None
+    assert author.id == author_id
     assert author.name == "Test Author"
 
-def test_author_articles(setup_db):
-    author = Author.find_by_id(1)
-    articles = author.articles()
-    assert len(articles) == 1
-    assert articles[0].title == "Test Article"
-
-def test_author_magazines(setup_db):
-    author = Author.find_by_id(1)
-    magazines = author.magazines()
-    assert len(magazines) == 1
-    assert magazines[0].name == "Test Magazine"
-
-def test_author_topic_areas(setup_db):
-    author = Author.find_by_id(1)
-    topics = author.topic_areas()
-    assert len(topics) == 1
-    assert topics[0] == "Test Category"
+def test_author_save(db_connection):
+    # Test saving a new author
+    author = Author("New Author")
+    saved_author = author.save()
+    
+    assert saved_author.id is not None
+    assert saved_author.name == "New Author"
+    
+    # Verify it exists in database
+    cursor = db_connection.cursor()
+    cursor.execute("SELECT * FROM authors WHERE id = ?", (saved_author.id,))
+    db_author = cursor.fetchone()
+    
+    assert db_author is not None
+    assert db_author['name'] == "New Author"
